@@ -32,7 +32,7 @@ ALLOWED_HOSTS = [
     "localhost",
     "annoying-annotate-shush.ngrok-free.dev",
     "primary-school-mngt-syst-backend-2.onrender.com",
-    "https://elimumasomo.netlify.app",
+    # "https://elimumasomo.netlify.app",
 ]
 
 
@@ -59,20 +59,20 @@ INSTALLED_APPS = [
 
 
 MIDDLEWARE = [
-    
-    'django.middleware.security.SecurityMiddleware',
-    'whitenoise.middleware.WhiteNoiseMiddleware',
-    'corsheaders.middleware.CorsMiddleware',
-    'django.contrib.sessions.middleware.SessionMiddleware',
-    
-    'django.middleware.security.SecurityMiddleware',
-    'django.contrib.sessions.middleware.SessionMiddleware',
-    'django.middleware.common.CommonMiddleware',
-    'django.middleware.csrf.CsrfViewMiddleware',
-    'django.contrib.auth.middleware.AuthenticationMiddleware',
-    'django.contrib.messages.middleware.MessageMiddleware',
-    'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    "django.middleware.security.SecurityMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware",
+    "corsheaders.middleware.CorsMiddleware",
+    "django.contrib.sessions.middleware.SessionMiddleware",
+    "django.middleware.common.CommonMiddleware",
+    "django.middleware.csrf.CsrfViewMiddleware",
+    "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "django.contrib.messages.middleware.MessageMiddleware",
+    "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
+
+    
+
+
 
 ROOT_URLCONF = 'school_system_backend.urls'
 
@@ -185,14 +185,29 @@ MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 # CORS (for React later)
 # =========================
 # CORS_ALLOW_ALL_ORIGINS = True
+# =========================
+# CORS
+# =========================
+
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",
     "https://elimumasomo.netlify.app",
 ]
 
+# Allow Netlify deploy preview URLs such as:
+# https://6ac4e12d397c040008d059cd--elimumasomo.netlify.app
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r"^https://[a-z0-9]+--elimumasomo\.netlify\.app$",
+]
+
+# =========================
+# CSRF
+# =========================
+
 CSRF_TRUSTED_ORIGINS = [
     "http://localhost:3000",
     "https://elimumasomo.netlify.app",
+    "https://*.elimumasomo.netlify.app",
 ]
 
 # =========================
