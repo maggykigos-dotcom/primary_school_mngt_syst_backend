@@ -32,6 +32,7 @@ ALLOWED_HOSTS = [
     "localhost",
     "annoying-annotate-shush.ngrok-free.dev",
     "primary-school-mngt-syst-backend-2.onrender.com",
+    "https://elimumasomo.netlify.app",
 ]
 
 
