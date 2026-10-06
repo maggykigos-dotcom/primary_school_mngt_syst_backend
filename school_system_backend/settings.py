@@ -31,6 +31,7 @@ ALLOWED_HOSTS = [
     "127.0.0.1",
     "localhost",
     "annoying-annotate-shush.ngrok-free.dev",
+    "primary-school-mngt-syst-backend-2.onrender.com",
 ]
 
 
