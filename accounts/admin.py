@@ -6,6 +6,8 @@ from .models import User, Student, Teacher, Parent
 
 @admin.register(User)
 class CustomUserAdmin(UserAdmin):
+    model = User
+
     fieldsets = UserAdmin.fieldsets + (
         (
             "School Information",
@@ -13,7 +15,7 @@ class CustomUserAdmin(UserAdmin):
                 "fields": (
                     "role",
                     "date_of_birth",
-                    "phone",
+                    "phone_number",
                     "address",
                     "profile_picture",
                 )
@@ -28,7 +30,7 @@ class CustomUserAdmin(UserAdmin):
                 "fields": (
                     "role",
                     "date_of_birth",
-                    "phone",
+                    "phone_number",
                     "address",
                     "profile_picture",
                 )
@@ -50,7 +52,6 @@ class TeacherAdmin(admin.ModelAdmin):
 @admin.register(Parent)
 class ParentAdmin(admin.ModelAdmin):
     list_display = ("user",)
-
 
 
 # from django.contrib import admin
