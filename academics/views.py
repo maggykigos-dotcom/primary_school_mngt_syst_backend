@@ -1,7 +1,7 @@
 from rest_framework.viewsets import ModelViewSet
 from django.db.models import Q
 from rest_framework.permissions import IsAuthenticated
-from rest_framework import status
+from rest_framework import  serializers, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.exceptions import PermissionDenied
@@ -20,7 +20,8 @@ from .models import (
     Assignment,
     QuizQuestion,
     Timetable,
-    TermPerformanceReport
+    TermPerformanceReport,
+    TeachingAssignment,
 )
 
 from .serializers import (
@@ -36,7 +37,7 @@ from .serializers import (
     QuizQuestionSerializer,
     StudentQuizQuestionSerializer,
     TermPerformanceReportSerializer
-    
+
 )
 
 class SubjectViewSet(ModelViewSet):
@@ -70,10 +71,12 @@ class SubjectViewSet(ModelViewSet):
             if not teacher:
                 return Subject.objects.none()
 
-            return teacher.subjects.all()
-
+            return Subject.objects.filter(
+                Q(teachers=teacher)
+                | Q(teaching_assignments__teacher=teacher)
+            ).distinct()
         return Subject.objects.none()
-        
+
 class GradeViewSet(ModelViewSet):
     queryset = Grade.objects.all()
     serializer_class = GradeSerializer
@@ -103,8 +106,10 @@ class SchoolClassViewSet(ModelViewSet):
                 return SchoolClass.objects.none()
 
             return SchoolClass.objects.filter(
-                teacher=teacher
-            )
+                Q(teacher=teacher)
+                | Q(teaching_assignments__teacher=teacher)
+            ).distinct()
+
 
         # STUDENT
         if user.role == "student":
@@ -183,8 +188,10 @@ class AttendanceViewSet(ModelViewSet):
                 return Attendance.objects.none()
 
             return attendance.filter(
-                school_class__teacher=teacher
-            )
+                Q(school_class__teacher=teacher)
+                | Q(school_class__teaching_assignments__teacher=teacher)
+            ).distinct()
+
 
         # ==================================================
         # STUDENT
@@ -282,8 +289,10 @@ class AttendanceViewSet(ModelViewSet):
                 )
 
             classes = SchoolClass.objects.filter(
-                teacher=teacher
-            )
+                Q(teacher=teacher)
+                | Q(teaching_assignments__teacher=teacher)
+            ).distinct()
+
 
         # ==================================================
         # OTHER USERS
@@ -383,10 +392,13 @@ class AttendanceViewSet(ModelViewSet):
 
         classes = (
             SchoolClass.objects
-            .filter(teacher=teacher)
+            .filter(
+                Q(teacher=teacher)
+                | Q(teaching_assignments__teacher=teacher)
+            )
+            .distinct()
             .prefetch_related("students__user")
         )
-
         result = []
 
         for school_class in classes:
@@ -517,12 +529,18 @@ class AttendanceViewSet(ModelViewSet):
                     status=status.HTTP_403_FORBIDDEN
                 )
 
-            if school_class.teacher_id != teacher.id:
-                return Response(
+            if not (
+                school_class.teacher_id == teacher.id
+                or TeachingAssignment.objects.filter(
+                    teacher=teacher,
+                    school_class=school_class,
+                ).exists()
+            ):
+               return Response(
                     {
                         "detail": (
-                            "You can only record "
-                            "attendance for your own class."
+                            "You can only record attendance for "
+                            "your own class or a class assigned to you."
                         )
                     },
                     status=status.HTTP_403_FORBIDDEN
@@ -617,9 +635,9 @@ class AttendanceViewSet(ModelViewSet):
                 ),
             },
             status=status.HTTP_200_OK
-        )    
+        )
 
-    
+
 
 
 class SectionViewSet(ModelViewSet):
@@ -645,8 +663,10 @@ class SectionViewSet(ModelViewSet):
                 return Section.objects.none()
 
             return Section.objects.filter(
-                school_class__teacher=teacher
-            )
+                Q(school_class__teacher=teacher)
+                | Q(school_class__teaching_assignments__teacher=teacher)
+            ).distinct()
+
 
         # STUDENT
         if user.role == "student":
@@ -722,18 +742,21 @@ class ExamResultViewSet(ModelViewSet):
     def get_queryset(self):
         user = self.request.user
 
+        queryset = ExamResult.objects.select_related(
+            "student",
+            "student__user",
+            "subject",
+            "school_class",
+            "school_class__grade",
+        )
+
         # ======================================================
         # ADMIN
         # ======================================================
 
         if user.role == "admin":
-            return ExamResult.objects.select_related(
-                "student",
-                "student__user",
-                "subject",
-                "school_class",
-                "school_class__grade",
-            ).all()
+            return queryset.all()
+
 
         # ======================================================
         # STUDENT
@@ -748,17 +771,9 @@ class ExamResultViewSet(ModelViewSet):
             )
 
             if not student:
-                return ExamResult.objects.none()
+                return queryset.none()
 
-            return ExamResult.objects.select_related(
-                "student",
-                "student__user",
-                "subject",
-                "school_class",
-                "school_class__grade",
-            ).filter(
-                student=student
-            )
+            return queryset.filter(student=student)
 
         # ======================================================
         # PARENT
@@ -773,17 +788,22 @@ class ExamResultViewSet(ModelViewSet):
             )
 
             if not parent:
-                return ExamResult.objects.none()
+                return queryset.none()
+                # return ExamResult.objects.none()
 
-            return ExamResult.objects.select_related(
-                "student",
-                "student__user",
-                "subject",
-                "school_class",
-                "school_class__grade",
-            ).filter(
+            return queryset.filter(
                 student__in=parent.students.all()
             )
+
+            # return ExamResult.objects.select_related(
+            #     "student",
+            #     "student__user",
+            #     "subject",
+            #     "school_class",
+            #     "school_class__grade",
+            # ).filter(
+            #     student__in=parent.students.all()
+            # )
 
         # ======================================================
         # TEACHER
@@ -798,17 +818,38 @@ class ExamResultViewSet(ModelViewSet):
             )
 
             if not teacher:
-                return ExamResult.objects.none()
+                return queryset.none()
+                # return ExamResult.objects.none()
 
-            return ExamResult.objects.select_related(
-                "student",
-                "student__user",
-                "subject",
-                "school_class",
-                "school_class__grade",
-            ).filter(
-                subject__in=teacher.subjects.all()
+            assignments = TeachingAssignment.objects.filter(
+                teacher=teacher
+            ).values_list(
+                "school_class_id",
+                "subject_id"
             )
+
+            allowed_combinations = Q(pk__in=[])
+
+            for class_id, subject_id in assignments:
+                allowed_combinations |= Q(
+                    school_class_id=class_id,
+                    subject_id=subject_id
+                )
+
+            return queryset.filter(
+                allowed_combinations
+            ).distinct()
+
+        return queryset.none()
+            # return ExamResult.objects.select_related(
+            #     "student",
+            #     "student__user",
+            #     "subject",
+            #     "school_class",
+            #     "school_class__grade",
+            # ).filter(
+            #     subject__in=teacher.subjects.all()
+            # )
 
         # ======================================================
         # UNKNOWN ROLE
@@ -819,161 +860,291 @@ class ExamResultViewSet(ModelViewSet):
     # ==========================================================
     # CREATE
     # ==========================================================
-
     def perform_create(self, serializer):
         user = self.request.user
 
-        # ------------------------------------------------------
-        # Only Admin and Teacher can create results
-        # ------------------------------------------------------
-
+        # Only admins and teachers can create results
         if user.role not in ["admin", "teacher"]:
-            from rest_framework.exceptions import PermissionDenied
-
             raise PermissionDenied(
                 "You do not have permission to enter exam results."
             )
 
-        # ------------------------------------------------------
-        # Teacher can only enter results for subjects they teach
-        # ------------------------------------------------------
+        student = serializer.validated_data.get("student")
+        subject = serializer.validated_data.get("subject")
 
+        # Make sure a student was selected
+        if not student:
+            raise serializers.ValidationError({
+                "student": "Please select a valid student."
+            })
+
+        # Get the class automatically from the selected student
+        school_class = student.school_class
+
+        # Make sure the student has a class assigned
+        if not school_class:
+            raise serializers.ValidationError({
+                "student": "This student has no school class assigned. "
+                        "Please assign the student to a class first."
+            })
+
+        # Teachers must have the exact subject-and-class assignment
         if user.role == "teacher":
-
-            teacher = getattr(
-                user,
-                "teacher_profile",
-                None
-            )
+            teacher = getattr(user, "teacher_profile", None)
 
             if not teacher:
-                from rest_framework.exceptions import PermissionDenied
-
                 raise PermissionDenied(
                     "Teacher profile not found."
                 )
 
-            subject = serializer.validated_data.get(
-                "subject"
-            )
+            assigned = TeachingAssignment.objects.filter(
+                teacher=teacher,
+                subject=subject,
+                school_class=school_class,
+            ).exists()
 
-            if not teacher.subjects.filter(
-                id=subject.id
-            ).exists():
-
-                from rest_framework.exceptions import PermissionDenied
-
+            if not assigned:
                 raise PermissionDenied(
-                    "You can only enter results for subjects "
-                    "you teach."
+                    "You can only enter results for subjects and classes "
+                    "assigned to you."
                 )
 
-        serializer.save()
+        # Save the result with the student's actual class
+        serializer.save(school_class=school_class)
+
+        # user = self.request.user
+
+        # # ------------------------------------------------------
+        # # Only Admin and Teacher can create results
+        # # ------------------------------------------------------
+
+        # if user.role not in ["admin", "teacher"]:
+        #     from rest_framework.exceptions import PermissionDenied
+
+        #     raise PermissionDenied(
+        #         "You do not have permission to enter exam results."
+        #     )
+
+        # # ------------------------------------------------------
+        # # Teacher can only enter results for subjects they teach
+        # # ------------------------------------------------------
+
+        # if user.role == "teacher":
+
+        #     teacher = getattr(
+        #         user,
+        #         "teacher_profile",
+        #         None
+        #     )
+
+        #     if not teacher:
+        #         from rest_framework.exceptions import PermissionDenied
+
+        #         raise PermissionDenied(
+        #             "Teacher profile not found."
+        #         )
+
+        #     subject = serializer.validated_data.get(
+        #         "subject"
+        #     )
+
+        #     if not teacher.subjects.filter(
+        #         id=subject.id
+        #     ).exists():
+
+        #         from rest_framework.exceptions import PermissionDenied
+
+        #         raise PermissionDenied(
+        #             "You can only enter results for subjects "
+        #             "you teach."
+        #         )
+
+        # serializer.save()
 
     # ==========================================================
     # UPDATE
     # ==========================================================
 
     def perform_update(self, serializer):
+
         user = self.request.user
 
-        # ------------------------------------------------------
-        # Only Admin and Teacher can update
-        # ------------------------------------------------------
-
+        # Only admins and teachers can update results
         if user.role not in ["admin", "teacher"]:
-            from rest_framework.exceptions import PermissionDenied
-
             raise PermissionDenied(
                 "You do not have permission to edit exam results."
             )
 
-        # ------------------------------------------------------
-        # Teacher subject restriction
-        # ------------------------------------------------------
+        instance = serializer.instance
 
+        # Use submitted values, or retain existing values
+        student = serializer.validated_data.get(
+            "student",
+            instance.student
+        )
+        subject = serializer.validated_data.get(
+            "subject",
+            instance.subject
+        )
+        school_class = serializer.validated_data.get(
+            "school_class",
+            instance.school_class
+        )
+
+        # Ensure the student belongs to the selected class
+        if student.school_class_id != school_class.id:
+            raise serializers.ValidationError({
+                "student": "This student does not belong to the selected class."
+            })
+
+        # Teachers must be assigned to the exact subject and class
         if user.role == "teacher":
-
-            teacher = getattr(
-                user,
-                "teacher_profile",
-                None
-            )
+            teacher = getattr(user, "teacher_profile", None)
 
             if not teacher:
-                from rest_framework.exceptions import PermissionDenied
-
                 raise PermissionDenied(
                     "Teacher profile not found."
                 )
 
-            subject = serializer.validated_data.get(
-                "subject",
-                serializer.instance.subject
-            )
+            assigned = TeachingAssignment.objects.filter(
+                teacher=teacher,
+                subject=subject,
+                school_class=school_class,
+            ).exists()
 
-            if not teacher.subjects.filter(
-                id=subject.id
-            ).exists():
-
-                from rest_framework.exceptions import PermissionDenied
-
+            if not assigned:
                 raise PermissionDenied(
-                    "You can only edit results for subjects "
-                    "you teach."
+                    "You can only edit results for subjects and classes assigned to you."
                 )
 
         serializer.save()
+        # user = self.request.user
+
+        # # ------------------------------------------------------
+        # # Only Admin and Teacher can update
+        # # ------------------------------------------------------
+
+        # if user.role not in ["admin", "teacher"]:
+        #     from rest_framework.exceptions import PermissionDenied
+
+        #     raise PermissionDenied(
+        #         "You do not have permission to edit exam results."
+        #     )
+
+        # # ------------------------------------------------------
+        # # Teacher subject restriction
+        # # ------------------------------------------------------
+
+        # if user.role == "teacher":
+
+        #     teacher = getattr(
+        #         user,
+        #         "teacher_profile",
+        #         None
+        #     )
+
+        #     if not teacher:
+        #         from rest_framework.exceptions import PermissionDenied
+
+        #         raise PermissionDenied(
+        #             "Teacher profile not found."
+        #         )
+
+        #     subject = serializer.validated_data.get(
+        #         "subject",
+        #         serializer.instance.subject
+        #     )
+
+        #     if not teacher.subjects.filter(
+        #         id=subject.id
+        #     ).exists():
+
+        #         from rest_framework.exceptions import PermissionDenied
+
+        #         raise PermissionDenied(
+        #             "You can only edit results for subjects "
+        #             "you teach."
+        #         )
+
+        # serializer.save()
 
     # ==========================================================
     # DELETE
     # ==========================================================
-
     def perform_destroy(self, instance):
         user = self.request.user
 
-        # ------------------------------------------------------
-        # Only Admin and Teacher can delete
-        # ------------------------------------------------------
-
+        # Only admins and teachers can delete results
         if user.role not in ["admin", "teacher"]:
-            from rest_framework.exceptions import PermissionDenied
-
             raise PermissionDenied(
                 "You do not have permission to delete exam results."
             )
 
-        # ------------------------------------------------------
-        # Teacher subject restriction
-        # ------------------------------------------------------
-
+        # Teachers can delete results only for their assignments
         if user.role == "teacher":
-
-            teacher = getattr(
-                user,
-                "teacher_profile",
-                None
-            )
+            teacher = getattr(user, "teacher_profile", None)
 
             if not teacher:
-                from rest_framework.exceptions import PermissionDenied
-
                 raise PermissionDenied(
                     "Teacher profile not found."
                 )
 
-            if not teacher.subjects.filter(
-                id=instance.subject.id
-            ).exists():
+            assigned = TeachingAssignment.objects.filter(
+                teacher=teacher,
+                subject=instance.subject,
+                school_class=instance.school_class,
+            ).exists()
 
-                from rest_framework.exceptions import PermissionDenied
-
+            if not assigned:
                 raise PermissionDenied(
-                    "You can only delete results for subjects "
-                    "you teach."
+                    "You can only delete results for subjects and classes assigned to you."
                 )
 
         instance.delete()
+    #     user = self.request.user
+
+    #     # ------------------------------------------------------
+    #     # Only Admin and Teacher can delete
+    #     # ------------------------------------------------------
+
+    #     if user.role not in ["admin", "teacher"]:
+    #         from rest_framework.exceptions import PermissionDenied
+
+    #         raise PermissionDenied(
+    #             "You do not have permission to delete exam results."
+    #         )
+
+    #     # ------------------------------------------------------
+    #     # Teacher subject restriction
+    #     # ------------------------------------------------------
+
+    #     if user.role == "teacher":
+
+    #         teacher = getattr(
+    #             user,
+    #             "teacher_profile",
+    #             None
+    #         )
+
+    #         if not teacher:
+    #             from rest_framework.exceptions import PermissionDenied
+
+    #             raise PermissionDenied(
+    #                 "Teacher profile not found."
+    #             )
+
+    #         if not teacher.subjects.filter(
+    #             id=instance.subject.id
+    #         ).exists():
+
+    #             from rest_framework.exceptions import PermissionDenied
+
+    #             raise PermissionDenied(
+    #                 "You can only delete results for subjects "
+    #                 "you teach."
+    #             )
+
+    #     instance.delete()
 
 
 
@@ -1452,7 +1623,108 @@ class AssignmentViewSet(ModelViewSet):
             ).distinct()
 
         return Assignment.objects.none()
+    def perform_create(self, serializer):
+        user = self.request.user
 
+        # Only admins and teachers can create assignments
+        if user.role not in ["admin", "teacher"]:
+            raise PermissionDenied(
+                "You do not have permission to create assignments."
+            )
+
+        if user.role == "admin":
+            serializer.save()
+            return
+
+        teacher = getattr(user, "teacher_profile", None)
+
+        if not teacher:
+            raise PermissionDenied("Teacher profile not found.")
+
+        assigned_teacher = serializer.validated_data.get("teacher")
+        subject = serializer.validated_data.get("subject")
+        school_class = serializer.validated_data.get("school_class")
+
+        if assigned_teacher != teacher:
+            raise PermissionDenied(
+                "You can only create assignments under your own teacher profile."
+            )
+
+        if not TeachingAssignment.objects.filter(
+            teacher=teacher,
+            subject=subject,
+            school_class=school_class,
+        ).exists():
+            raise PermissionDenied(
+                "You are not assigned to teach this subject in this class."
+            )
+
+        serializer.save()
+
+    def perform_update(self, serializer):
+        user = self.request.user
+
+        # Only admins and teachers can update assignments
+        if user.role not in ["admin", "teacher"]:
+            raise PermissionDenied(
+                "You do not have permission to edit assignments."
+            )
+
+        if user.role == "admin":
+            serializer.save()
+            return
+
+        teacher = getattr(user, "teacher_profile", None)
+
+        if not teacher:
+            raise PermissionDenied("Teacher profile not found.")
+
+        instance = serializer.instance
+
+        assigned_teacher = serializer.validated_data.get(
+            "teacher", instance.teacher
+        )
+        subject = serializer.validated_data.get(
+            "subject", instance.subject
+        )
+        school_class = serializer.validated_data.get(
+            "school_class", instance.school_class
+        )
+
+        if instance.teacher != teacher or assigned_teacher != teacher:
+            raise PermissionDenied(
+                "You can only edit your own assignments."
+            )
+
+        if not TeachingAssignment.objects.filter(
+            teacher=teacher,
+            subject=subject,
+            school_class=school_class,
+        ).exists():
+            raise PermissionDenied(
+                "You are not assigned to teach this subject in this class."
+            )
+
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        user = self.request.user
+
+        # Only admins and teachers can delete assignments
+        if user.role not in ["admin", "teacher"]:
+            raise PermissionDenied(
+                "You do not have permission to delete assignments."
+            )
+
+        if user.role == "teacher":
+            teacher = getattr(user, "teacher_profile", None)
+
+            if not teacher or instance.teacher != teacher:
+                raise PermissionDenied(
+                    "You can only delete your own assignments."
+                )
+
+        instance.delete()
 class QuizQuestionViewSet(ModelViewSet):
     permission_classes = [IsAuthenticated]
 
@@ -1612,8 +1884,8 @@ class QuizQuestionViewSet(ModelViewSet):
 
         raise PermissionDenied(
             "You do not have permission to delete quiz questions."
-        )    
-        
+        )
+
 class TimetableViewSet(ModelViewSet):
     serializer_class = TimetableSerializer
     permission_classes = [IsAuthenticated]
@@ -1690,3 +1962,122 @@ class TimetableViewSet(ModelViewSet):
             "start_time"
         )
 
+
+    def perform_create(self, serializer):
+        user = self.request.user
+
+        if user.role not in ["admin", "teacher"]:
+            raise PermissionDenied(
+                "You do not have permission to create timetables."
+            )
+
+        # Admins can manage all timetables
+        if user.role == "admin":
+            serializer.save()
+            return
+
+        teacher = getattr(user, "teacher_profile", None)
+
+        if not teacher:
+            raise PermissionDenied("Teacher profile not found.")
+
+        assigned_teacher = serializer.validated_data.get("teacher")
+        subject = serializer.validated_data.get("subject")
+        school_class = serializer.validated_data.get("school_class")
+
+        if assigned_teacher != teacher:
+            raise PermissionDenied(
+                "You can only create timetables under your own teacher profile."
+            )
+
+        # When a class is selected, require an exact teaching assignment
+        if school_class:
+            assigned = TeachingAssignment.objects.filter(
+                teacher=teacher,
+                subject=subject,
+                school_class=school_class,
+            ).exists()
+
+            if not assigned:
+                raise PermissionDenied(
+                    "You are not assigned to teach this subject in this class."
+                )
+
+        # Preserve support for timetables without a selected class
+        elif not subject.teachers.filter(id=teacher.id).exists():
+            raise PermissionDenied(
+                "You are not assigned to teach this subject."
+            )
+
+        serializer.save()
+
+    def perform_update(self, serializer):
+        user = self.request.user
+
+        if user.role not in ["admin", "teacher"]:
+            raise PermissionDenied(
+                "You do not have permission to edit timetables."
+            )
+
+        if user.role == "admin":
+            serializer.save()
+            return
+
+        teacher = getattr(user, "teacher_profile", None)
+
+        if not teacher:
+            raise PermissionDenied("Teacher profile not found.")
+
+        instance = serializer.instance
+
+        assigned_teacher = serializer.validated_data.get(
+            "teacher", instance.teacher
+        )
+        subject = serializer.validated_data.get(
+            "subject", instance.subject
+        )
+        school_class = serializer.validated_data.get(
+            "school_class", instance.school_class
+        )
+
+        if instance.teacher != teacher or assigned_teacher != teacher:
+            raise PermissionDenied(
+                "You can only edit your own timetables."
+            )
+
+        if school_class:
+            assigned = TeachingAssignment.objects.filter(
+                teacher=teacher,
+                subject=subject,
+                school_class=school_class,
+            ).exists()
+
+            if not assigned:
+                raise PermissionDenied(
+                    "You are not assigned to teach this subject in this class."
+                )
+
+        elif not subject.teachers.filter(id=teacher.id).exists():
+            raise PermissionDenied(
+                "You are not assigned to teach this subject."
+            )
+
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        user = self.request.user
+
+        if user.role not in ["admin", "teacher"]:
+            raise PermissionDenied(
+                "You do not have permission to delete timetables."
+            )
+
+        if user.role == "teacher":
+            teacher = getattr(user, "teacher_profile", None)
+
+            if not teacher or instance.teacher != teacher:
+                raise PermissionDenied(
+                    "You can only delete your own timetables."
+                )
+
+        instance.delete()

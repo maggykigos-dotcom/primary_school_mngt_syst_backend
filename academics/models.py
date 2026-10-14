@@ -332,4 +332,37 @@ class TermPerformanceReport(models.Model):
         ordering = ["-uploaded_at"]
 
     def __str__(self):
-        return f"{self.student} - {self.term} - {self.session}"    
+        return f"{self.student} - {self.term} - {self.session}"
+
+class TeachingAssignment(models.Model):
+    teacher = models.ForeignKey(
+        "accounts.Teacher",
+        on_delete=models.CASCADE,
+        related_name="teaching_assignments",
+    )
+
+    subject = models.ForeignKey(
+        "academics.Subject",
+        on_delete=models.CASCADE,
+        related_name="teaching_assignments",
+    )
+
+    school_class = models.ForeignKey(
+        "academics.SchoolClass",
+        on_delete=models.CASCADE,
+        related_name="teaching_assignments",
+    )
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["teacher", "subject", "school_class"],
+                name="unique_teacher_subject_school_class",
+            )
+        ]
+
+    def __str__(self):
+        return (
+            f"{self.teacher} - {self.subject} - "
+            f"{self.school_class}"
+        )

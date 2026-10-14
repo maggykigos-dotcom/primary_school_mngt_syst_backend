@@ -10,6 +10,7 @@ from .models import (
     Assignment,
     QuizQuestion,
     TermPerformanceReport,
+    TeachingAssignment,
 )
 
 from accounts.models import Teacher, Student
@@ -223,82 +224,6 @@ class AttendanceSerializer(serializers.ModelSerializer):
             instance,
             validated_data
         )
-# # # -----------------------------
-# # # ATTENDANCE
-# # # -----------------------------
-
-# class AttendanceSerializer(serializers.ModelSerializer):
-#     student_name = serializers.CharField(
-#         source="student.user.get_full_name",
-#         read_only=True
-#     )
-
-#     school_class_name = serializers.SerializerMethodField()
-
-#     class Meta:
-#         model = Attendance
-
-#         fields = [
-#             "id",
-#             "student",
-#             "student_name",
-#             "school_class",
-#             "school_class_name",
-#             "date",
-#             "status",
-#             "reason",
-#             "created_at",
-#             "updated_at",
-#         ]
-
-#         read_only_fields = [
-#             "school_class",
-#             "school_class_name",
-#             "created_at",
-#             "updated_at",
-#         ]
-
-#     def get_school_class_name(self, obj):
-#         if obj.school_class:
-#             return str(obj.school_class)
-
-#         return None
-
-#     def validate(self, data):
-#         student = data.get("student")
-
-#         if not student:
-#             raise serializers.ValidationError({
-#                 "student": "Student is required."
-#             })
-
-#         if not student.school_class:
-#             raise serializers.ValidationError({
-#                 "student": (
-#                     "This student has not been assigned "
-#                     "to a class."
-#                 )
-#             })
-
-#         return data
-
-#     def create(self, validated_data):
-#         student = validated_data["student"]
-
-#         validated_data["school_class"] = student.school_class
-
-#         return Attendance.objects.create(
-#             **validated_data
-#         )
-
-#     def update(self, instance, validated_data):
-#         # Never allow school_class to be manually changed
-#         validated_data.pop("school_class", None)
-
-#         return super().update(
-#             instance,
-#             validated_data
-#         )
 
 class BulkAttendanceItemSerializer(serializers.Serializer):
 
@@ -721,7 +646,7 @@ class TermPerformanceReportSerializer(serializers.ModelSerializer):
                     )
                 })
 
-        return data        
+        return data
 
 # -----------------------------
 # TIMETABLE
@@ -771,13 +696,38 @@ class TimetableSerializer(serializers.ModelSerializer):
 
         return "Class not assigned"
 
-    def validate(self, data):
-        teacher = data.get("teacher")
-        subject = data.get("subject")
-        school_class = data.get("school_class")
 
-        # Teacher must teach the selected subject
-        if teacher and subject:
+    def validate(self, data):
+        teacher = data.get(
+            "teacher",
+            getattr(self.instance, "teacher", None)
+        )
+        subject = data.get(
+            "subject",
+            getattr(self.instance, "subject", None)
+        )
+        school_class = data.get(
+            "school_class",
+            getattr(self.instance, "school_class", None)
+        )
+
+        # Check the exact teacher-subject-class assignment.
+        if teacher and subject and school_class:
+            assigned = TeachingAssignment.objects.filter(
+                teacher=teacher,
+                subject=subject,
+                school_class=school_class,
+            ).exists()
+
+            if not assigned:
+                raise serializers.ValidationError(
+                    "This teacher is not assigned to teach "
+                    "this subject in this class."
+                )
+
+        # Preserve the existing check for timetables
+        # that do not specify a class.
+        elif teacher and subject:
             if not subject.teachers.filter(
                 id=teacher.id
             ).exists():
@@ -785,21 +735,52 @@ class TimetableSerializer(serializers.ModelSerializer):
                     "Teacher is not assigned to this subject."
                 )
 
-        # Teacher must be assigned to selected class
-        if teacher and school_class:
-            if school_class.teacher != teacher:
-                raise serializers.ValidationError(
-                    "Teacher is not assigned to this class."
-                )
+        # End time must be after start time.
+        start_time = data.get(
+            "start_time",
+            getattr(self.instance, "start_time", None)
+        )
+        end_time = data.get(
+            "end_time",
+            getattr(self.instance, "end_time", None)
+        )
 
-        # End time must be after start time
-        if data.get("start_time") and data.get("end_time"):
-            if data["start_time"] >= data["end_time"]:
-                raise serializers.ValidationError(
-                    "End time must be later than start time."
-                )
+        if start_time and end_time and start_time >= end_time:
+            raise serializers.ValidationError(
+                "End time must be later than start time."
+            )
 
         return data
+
+
+        # teacher = data.get("teacher")
+        # subject = data.get("subject")
+        # school_class = data.get("school_class")
+
+        # # Teacher must teach the selected subject
+        # if teacher and subject:
+        #     if not subject.teachers.filter(
+        #         id=teacher.id
+        #     ).exists():
+        #         raise serializers.ValidationError(
+        #             "Teacher is not assigned to this subject."
+        #         )
+
+        # # Teacher must be assigned to selected class
+        # if teacher and school_class:
+        #     if school_class.teacher != teacher:
+        #         raise serializers.ValidationError(
+        #             "Teacher is not assigned to this class."
+        #         )
+
+        # # End time must be after start time
+        # if data.get("start_time") and data.get("end_time"):
+        #     if data["start_time"] >= data["end_time"]:
+        #         raise serializers.ValidationError(
+        #             "End time must be later than start time."
+        #         )
+
+        # return data
 
 
 
@@ -870,8 +851,9 @@ class AssignmentSerializer(serializers.ModelSerializer):
 
         return str(teacher)
 
-    def validate(self, data):
 
+
+    def validate(self, data):
         teacher = data.get(
             "teacher",
             getattr(self.instance, "teacher", None)
@@ -887,33 +869,66 @@ class AssignmentSerializer(serializers.ModelSerializer):
             getattr(self.instance, "school_class", None)
         )
 
-        # ==========================================
-        # CHECK TEACHER-SUBJECT RELATIONSHIP
-        # ==========================================
+        # The teacher must be assigned to this exact
+        # subject in this exact class.
+        if teacher and subject and school_class:
+            assigned = TeachingAssignment.objects.filter(
+                teacher=teacher,
+                subject=subject,
+                school_class=school_class,
+            ).exists()
 
-        if teacher and subject:
-
-            if not subject.teachers.filter(
-                id=teacher.id
-            ).exists():
-
+            if not assigned:
                 raise serializers.ValidationError(
-                    "Teacher is not assigned to this subject."
-                )
-
-        # ==========================================
-        # CHECK TEACHER-CLASS RELATIONSHIP
-        # ==========================================
-
-        if teacher and school_class:
-
-            if school_class.teacher != teacher:
-
-                raise serializers.ValidationError(
-                    "Teacher is not assigned to this class."
+                    "This teacher is not assigned to teach "
+                    "this subject in this class."
                 )
 
         return data
+
+
+        # teacher = data.get(
+        #     "teacher",
+        #     getattr(self.instance, "teacher", None)
+        # )
+
+        # subject = data.get(
+        #     "subject",
+        #     getattr(self.instance, "subject", None)
+        # )
+
+        # school_class = data.get(
+        #     "school_class",
+        #     getattr(self.instance, "school_class", None)
+        # )
+
+        # # ==========================================
+        # # CHECK TEACHER-SUBJECT RELATIONSHIP
+        # # ==========================================
+
+        # if teacher and subject:
+
+        #     if not subject.teachers.filter(
+        #         id=teacher.id
+        #     ).exists():
+
+        #         raise serializers.ValidationError(
+        #             "Teacher is not assigned to this subject."
+        #         )
+
+        # # ==========================================
+        # # CHECK TEACHER-CLASS RELATIONSHIP
+        # # ==========================================
+
+        # if teacher and school_class:
+
+        #     if school_class.teacher != teacher:
+
+        #         raise serializers.ValidationError(
+        #             "Teacher is not assigned to this class."
+        #         )
+
+        # return data
 class QuizQuestionSerializer(serializers.ModelSerializer):
     class Meta:
         model = QuizQuestion

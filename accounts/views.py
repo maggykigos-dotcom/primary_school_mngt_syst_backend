@@ -4,6 +4,8 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 
 from .models import User, Student, Teacher, Parent
+from academics.models import TeachingAssignment
+from django.db.models import Q
 from .serializers import (
     StudentSerializer,
     ParentSerializer,
@@ -72,12 +74,13 @@ class StudentViewSet(viewsets.ModelViewSet):
 
             # Students belonging to classes taught by this teacher
             return Student.objects.filter(
-                school_class__teacher=teacher
+                   Q(school_class__teacher=teacher)
+                   | Q(school_class__teaching_assignments__teacher=teacher)
             ).select_related(
                 "user",
                 "school_class",
                 "school_class__grade"
-            )
+            ).distinct()
 
         # ==========================
         # STUDENT

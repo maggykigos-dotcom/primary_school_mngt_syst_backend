@@ -1,7 +1,7 @@
 from django.contrib import admin
 from .models import (
     Subject, Attendance,
-    ExamResult, Assignment, Timetable, Grade, SchoolClass,Section,QuizQuestion
+    ExamResult, Assignment, Timetable, Grade, SchoolClass,Section,QuizQuestion, TeachingAssignment
 )
 
 admin.site.register(Subject)
@@ -12,6 +12,7 @@ admin.site.register(Timetable)
 admin.site.register(Grade)
 admin.site.register(SchoolClass)
 admin.site.register(Section)
+admin.site.register(TeachingAssignment)
 @admin.register(QuizQuestion)
 class QuizQuestionAdmin(admin.ModelAdmin):
     list_display = (
